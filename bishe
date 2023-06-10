@@ -1,0 +1,377 @@
+/**
+
+  *
+  * THE PRESENT FIRMWARE WHICH IS FOR GUIDANCE ONLY AIMS AT PROVIDING CUSTOMERS
+  * WITH CODING INFORMATION REGARDING THEIR PRODUCTS IN ORDER FOR THEM TO SAVE
+  * TIME. AS A RESULT, STMICROELECTRONICS SHALL NOT BE HELD LIABLE FOR ANY
+  * DIRECT, INDIRECT OR CONSEQUENTIAL DAMAGES WITH RESPECT TO ANY CLAIMS ARISING
+  * FROM THE CONTENT OF SUCH FIRMWARE AND/OR THE USE MADE BY CUSTOMERS OF THE
+  * CODING INFORMATION CONTAINED HEREIN IN CONNECTION WITH THEIR PRODUCTS.
+  *
+  * <h2><center>&copy; COPYRIGHT 2011 STMicroelectronics</center></h2>
+  ******************************************************************************
+  */  
+
+/* Includes ------------------------------------------------------------------*/
+#include "stm32f10x.h"
+#include <stdio.h>
+#include "stm32f10x_gpio.h"
+#include "stm32f10x_adc.h"
+#include "stm32f10x_tim.h"
+#include "lcd.h"
+
+
+#define ST_CP_PIN GPIO_Pin_8
+#define DS_PIN GPIO_Pin_2
+#define SH_CP_PIN GPIO_Pin_1
+
+
+
+
+
+
+
+
+void HSE_SetSysClock(uint32_t pllmul)	
+{
+	__IO uint32_t HSEStartUpStatus = 0;	
+	
+	RCC_DeInit();	
+  RCC_HSEConfig(RCC_HSE_ON);	
+	HSEStartUpStatus = RCC_WaitForHSEStartUp();	
+	if (HSEStartUpStatus == SUCCESS)	
+	{
+		FLASH_PrefetchBufferCmd(FLASH_PrefetchBuffer_Enable);	
+
+// 0:0 < SYSCLK <= 24M
+// 1:24< SYSCLK <= 48M
+// 2:48< SYSCLK <= 72M
+		FLASH_SetLatency(FLASH_Latency_2);
+		RCC_HCLKConfig(RCC_SYSCLK_Div1);	
+		RCC_PCLK2Config(RCC_HCLK_Div1);
+		RCC_PCLK1Config(RCC_HCLK_Div2);
+		RCC_PLLConfig(RCC_PLLSource_HSE_Div1, pllmul);	
+		RCC_PLLCmd(ENABLE);	
+		while (RCC_GetFlagStatus(RCC_FLAG_PLLRDY) == RESET);	
+		RCC_SYSCLKConfig(RCC_SYSCLKSource_PLLCLK);	
+		while (RCC_GetSYSCLKSource() != 0x08);	
+	}
+	else
+	{
+
+		while (1);
+	}
+}
+
+
+
+void delay(uint32_t count)
+{
+    for(uint32_t i=0;i<count;i++);
+}
+
+
+
+void TIM1_Init(void)
+{
+
+	RCC_APB2PeriphClockCmd(RCC_APB2Periph_TIM1,ENABLE);
+
+
+	TIM_TimeBaseInitTypeDef  TIM_TimeBaseStructure;
+	TIM_TimeBaseStructure.TIM_Period=0xffff;				//ARR=65535us
+	TIM_TimeBaseStructure.TIM_Prescaler= 72-1;				//PSC = 1M = 1us;
+	TIM_TimeBaseStructure.TIM_ClockDivision=TIM_CKD_DIV1;	
+	TIM_TimeBaseStructure.TIM_CounterMode=TIM_CounterMode_Up; 		
+	TIM_TimeBaseStructure.TIM_RepetitionCounter=0;	
+	TIM_TimeBaseInit(TIM1, &TIM_TimeBaseStructure);
+
+
+
+  TIM_ICInitTypeDef  TIM_ICInitStructure;
+ 
+  TIM_ICInitStructure.TIM_Channel = TIM_Channel_1;
+  TIM_ICInitStructure.TIM_ICPolarity = TIM_ICPolarity_Rising;     
+  TIM_ICInitStructure.TIM_ICSelection = TIM_ICSelection_DirectTI; 
+  TIM_ICInitStructure.TIM_ICPrescaler = TIM_ICPSC_DIV1;           
+  TIM_ICInitStructure.TIM_ICFilter = 0x0;
+  TIM_PWMIConfig(TIM1, &TIM_ICInitStructure);
+  
+
+  TIM_ICInitStructure.TIM_Channel = TIM_Channel_2;
+  TIM_ICInitStructure.TIM_ICPolarity = TIM_ICPolarity_Falling;      
+  TIM_ICInitStructure.TIM_ICSelection = TIM_ICSelection_IndirectTI; 
+  TIM_ICInitStructure.TIM_ICPrescaler = TIM_ICPSC_DIV1;			
+  TIM_ICInitStructure.TIM_ICFilter = 0x0;
+  TIM_PWMIConfig(TIM1, &TIM_ICInitStructure);
+	
+
+  TIM_SelectInputTrigger(TIM1, TIM_TS_TI1FP1);		
+
+
+  TIM_SelectSlaveMode(TIM1, TIM_SlaveMode_Reset);
+  TIM_SelectMasterSlaveMode(TIM1,TIM_MasterSlaveMode_Enable); 
+
+
+  TIM_ITConfig(TIM1, TIM_IT_CC1, ENABLE);	
+
+  TIM_ClearITPendingBit(TIM1, TIM_IT_CC1);
+	
+
+  TIM_Cmd(TIM1, ENABLE);
+}
+
+void PWM_Intput_NVIC_Config(void)
+{
+    NVIC_InitTypeDef NVIC_InitStructure; 
+
+    NVIC_PriorityGroupConfig(NVIC_PriorityGroup_0);		
+	
+    NVIC_InitStructure.NVIC_IRQChannel = TIM1_CC_IRQn; 	
+    NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = 0;	 
+    NVIC_InitStructure.NVIC_IRQChannelSubPriority = 0;	
+    NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;
+    NVIC_Init(&NVIC_InitStructure);
+}
+
+float TIM1_IRQHandler(void)
+{
+  float IC1_CCR1,IC2_CCR2,duty;
+  TIM_ClearITPendingBit(TIM1, TIM_IT_CC1);
+  IC1_CCR1 = TIM_GetCapture1(TIM1);   
+  IC2_CCR2 = TIM_GetCapture2(TIM1);  
+	duty = IC2_CCR2/IC1_CCR1;
+	return duty ;
+}
+
+
+int main(void) {
+	
+	  
+		HSE_SetSysClock(9);	//8*9=72M
+	  TIM1_Init();
+   	PWM_Intput_NVIC_Config();
+    GPIO_InitTypeDef GPIO_InitStruct;
+    ADC_InitTypeDef ADC_InitStruct;
+   
+    RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOB, ENABLE);
+
+    GPIO_InitStruct.GPIO_Pin = GPIO_Pin_5;
+    GPIO_InitStruct.GPIO_Mode = GPIO_Mode_Out_PP;
+    GPIO_InitStruct.GPIO_Speed = GPIO_Speed_50MHz;
+    GPIO_Init(GPIOB, &GPIO_InitStruct);
+    
+	
+	  GPIO_InitStruct.GPIO_Pin = ST_CP_PIN | DS_PIN | SH_CP_PIN;
+    GPIO_InitStruct.GPIO_Mode = GPIO_Mode_Out_PP;
+    GPIO_InitStruct.GPIO_Speed = GPIO_Speed_50MHz;
+    GPIO_Init(GPIOB, &GPIO_InitStruct);
+	
+	
+	
+	  RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOA, ENABLE);
+    RCC_APB2PeriphClockCmd(RCC_APB2Periph_ADC1, ENABLE);
+    RCC_ADCCLKConfig(RCC_PCLK2_Div6);  
+
+    GPIO_InitStruct.GPIO_Pin = GPIO_Pin_0 | GPIO_Pin_1 | GPIO_Pin_2 | GPIO_Pin_3 |
+                                  GPIO_Pin_4 | GPIO_Pin_5 | GPIO_Pin_6 | GPIO_Pin_7 ;
+    GPIO_InitStruct.GPIO_Mode = GPIO_Mode_AIN;
+    GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+    ADC_DeInit(ADC1);  
+
+    ADC_InitStruct.ADC_Mode = ADC_Mode_Independent;
+    ADC_InitStruct.ADC_ScanConvMode = DISABLE;
+    ADC_InitStruct.ADC_ContinuousConvMode = DISABLE;
+    ADC_InitStruct.ADC_ExternalTrigConv = ADC_ExternalTrigConv_None;
+    ADC_InitStruct.ADC_DataAlign = ADC_DataAlign_Right;
+    ADC_InitStruct.ADC_NbrOfChannel = 9;
+    ADC_Init(ADC1, &ADC_InitStruct);
+
+    ADC_Cmd(ADC1, ENABLE);
+    ADC_ResetCalibration(ADC1);
+	  while (ADC_GetResetCalibrationStatus(ADC1))
+        ;
+    ADC_StartCalibration(ADC1);
+
+    while (ADC_GetCalibrationStatus(ADC1))
+        ;
+
+    GPIO_InitTypeDef GPIO_InitStructure;
+  
+    /* Enable the GPIOC clock */
+    RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOC, ENABLE);
+
+    /* Configure PC13 pin as push-pull output */
+    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_13| GPIO_Pin_14 | GPIO_Pin_15 ;
+    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_Out_PP;
+    GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
+    GPIO_Init(GPIOC, &GPIO_InitStructure);
+
+
+    GPIO_ResetBits(GPIOC, GPIO_Pin_13);
+ 
+////    ADC_SoftwareStartConvCmd(ADC1, ENABLE);	
+		
+		  LCD_Init();  
+			LCD_Clear(BLACK);
+			LCD_Str(15,20, YELLOW, "RF Power Amplifier");
+	    LCD_Str(30,70, WHITE, "Power: 0.0 dBm"); 
+      LCD_Str(30,120,WHITE, "Temp : 25 ");  LCD_Str(200,100,WHITE, "."); LCD_Str(206,120,WHITE, "C");
+      LCD_Str(30,170,WHITE, "Alarm: Normal"); 
+
+while(1){	
+
+	  GPIO_ResetBits(GPIOB, GPIO_Pin_5);
+
+		
+    uint16_t adc_values[8];
+
+    for (uint8_t i = 0; i < 8; i++) {
+     
+        ADC_RegularChannelConfig(ADC1, ADC_Channel_0 + i, 1, ADC_SampleTime_55Cycles5);
+    
+        ADC_SoftwareStartConvCmd(ADC1, ENABLE);
+     
+        while (!ADC_GetFlagStatus(ADC1, ADC_FLAG_EOC));
+  
+        adc_values[i] = ADC_GetConversionValue(ADC1);
+		}
+	 
+
+//  ADC_RegularChannelConfig(ADC1, ADC_Channel_1, 1, ADC_SampleTime_55Cycles5);
+//	ADC_SoftwareStartConvCmd(ADC1, ENABLE);
+//////     
+//     while (!ADC_GetFlagStatus(ADC1, ADC_FLAG_EOC));
+//  
+//        adc_values[1] = ADC_GetConversionValue(ADC1);
+//		
+//////		
+//////				
+//////		
+        uint16_t threshold_value = (uint16_t)(1.5 / 3.3 * 4095.0);    
+//////			
+        uint8_t output_values = 0;
+//		    adc_values[3] = 0;
+//		
+//		    adc_values[4] = 0;
+//		
+//		    adc_values[5] = 0;
+//		
+//		    adc_values[6] = 4000;
+//		
+//		    adc_values[7] = 4000;
+		
+for (uint8_t i = 3; i < 8; i++) {
+    if (adc_values[i] >= threshold_value) {
+			   output_values &= ~(1 << (i-3)); 
+      
+    } else {
+         output_values |= (1 << (i-3));  
+    }
+}
+        output_values  <<= 2  ;
+     if(output_values==0){
+		    output_values|=00000010;
+		 }
+
+
+// output_values = 0X55;//01010101
+
+// output_values|=0x7E;//01111110
+		 
+//	 output_values|=0x40;//01000000
+
+GPIO_SetBits(GPIOB, ST_CP_PIN);
+
+for (uint8_t i = 8; i >=1 ; i--) {
+   
+    uint8_t bit_value = (output_values >> (i-1)) & 0x01;
+   
+    if (bit_value == 0x01) {
+        GPIO_SetBits(GPIOB, DS_PIN);
+    } else {
+        GPIO_ResetBits(GPIOB, DS_PIN);
+    }
+    delay(1);  
+    GPIO_SetBits(GPIOB, SH_CP_PIN);
+    delay(1);  
+    GPIO_ResetBits(GPIOB, SH_CP_PIN);
+		
+}
+delay(1);  
+GPIO_ResetBits(GPIOB, ST_CP_PIN);
+delay(1);  
+GPIO_SetBits(GPIOB, ST_CP_PIN);
+
+
+
+float duty_value = TIM1_IRQHandler();
+float duty_threshold = 0.4;
+
+if(duty_value < duty_threshold){
+	GPIO_ResetBits(GPIOC, GPIO_Pin_14);
+}    else{
+  GPIO_SetBits(GPIOC, GPIO_Pin_14);
+}  
+
+
+
+if (adc_values[0] < threshold_value && adc_values[1] < threshold_value && adc_values[2] < threshold_value) {
+  GPIO_ResetBits(GPIOC, GPIO_Pin_13);
+} else {
+   GPIO_SetBits(GPIOC, GPIO_Pin_13);
+}
+
+
+
+if(adc_values[1] < threshold_value){
+	GPIO_ResetBits(GPIOC, GPIO_Pin_15);
+}    else{
+  GPIO_SetBits(GPIOC, GPIO_Pin_15);
+}  
+
+
+  float  power = 0;
+  power  = ((float) adc_values[0]/4096*100);
+  char pow[10];
+  sprintf (pow ,"Power : %2.1f dBm ", power  );
+  LCD_Str(30,70, WHITE, pow ); 
+
+
+  float  tem = 0;
+  tem = ((float) adc_values[7]/4096*100);
+  char buff[10];
+  sprintf (buff ,"Temp : %2d ",(int) tem );
+  LCD_Str(30,120,WHITE, buff);
+
+
+
+if(duty_value > duty_threshold && adc_values[1] > threshold_value)
+//if(1)
+	{LCD_Str(30,170,WHITE, "Alarm: D and S");
+}
+	else if(duty_value > duty_threshold)
+	{LCD_Str(30,170,WHITE, "Alarm: Duty "); 
+}
+  else if(adc_values[1] > threshold_value)
+  {LCD_Str(30,170,WHITE, "Alarm: Stand ");
+}
+else {LCD_Str(30,170,WHITE, "Alarm: Normal ");}
+
+
+delay(5);  
+}
+
+}
+
+		 
+
+
+
+
+
+		
+
+
+/******************* (C) COPYRIGHT 2011 STMicroelectronics *****END OF FILE****/
